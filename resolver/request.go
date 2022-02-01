@@ -12,7 +12,7 @@ type request struct {
 	StartTime   time.Time
 	StepCounter int
 
-	SName       dns.DomainName
+	SName       dns.Name
 	SType       dns.Type
 	SClass      dns.Class
 	NSList      []string
@@ -21,5 +21,5 @@ type request struct {
 }
 
 func (r *request) Start() error {
-
+	return nil
 }

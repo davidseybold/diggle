@@ -18,40 +18,27 @@ type Question struct {
 	Class Class
 }
 
-func (q *Question) marshal(w writer) error {
-	err := w.WriteName(q.Name)
-	if err != nil {
+func (q *Question) encode(w writeOffsetter, c *compressionCache) error {
+	if err := q.Name.encode(w, c); err != nil {
 		return err
 	}
 
-	err = w.WriteData(uint16(q.Type))
-	if err != nil {
+	if err := q.Type.encode(w, c); err != nil {
 		return err
 	}
 
-	return w.WriteData(uint16(q.Class))
+	return q.Class.encode(w, c)
 }
 
-func (q *Question) unmarshal(r reader) error {
-	name, err := r.ReadName()
-	if err != nil {
+func (q *Question) decode(r readSeekOffsetter) error {
+
+	if err := q.Name.decode(r); err != nil {
 		return err
 	}
 
-	qType, err := r.ReadUint16()
-	if err != nil {
+	if err := q.Type.decode(r); err != nil {
 		return err
 	}
 
-	qClass, err := r.ReadUint16()
-	if err != nil {
-		return err
-	}
-
-	q = &Question{
-		Name:  name,
-		Type:  Type(qType),
-		Class: Class(qClass),
-	}
-	return nil
+	return q.Class.decode(r)
 }

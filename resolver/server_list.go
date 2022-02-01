@@ -8,7 +8,6 @@ import (
 )
 
 type srv struct {
-	dns.NS
 	Priority int
 	Used     bool
 }
@@ -19,7 +18,7 @@ type addrScore struct {
 }
 
 type sList struct {
-	ZoneName   string
+	ZoneName   dns.Name
 	ZoneNS     []srv
 	NSAddr     map[string]net.IP
 	AddrScores map[string]addrScore

@@ -1,8 +1,98 @@
 package dns
 
-import (
-	"net"
+import "errors"
+
+const (
+	// TypeA An ipv4 host address
+	TypeA Type = 1
+	// TypeNS An authoritative name server
+	TypeNS Type = 2
+	// TypeMD a mail destination (Obsolete - use MX)
+	TypeMD Type = 3
+	// TypeMF a mail forwarder (Obsolete - use MX)
+	TypeMF Type = 4
+	// TypeCNAME the canonical name for an alias
+	TypeCNAME Type = 5
+	// TypeSOA marks the start of a zone of authority
+	TypeSOA Type = 6
+	// TypeMB a mailbox domain name (EXPERIMENTAL)
+	TypeMB Type = 7
+	// TypeMG a mail group member (EXPERIMENTAL)
+	TypeMG Type = 8
+	// TypeMR a mail rename domain name (EXPERIMENTAL)
+	TypeMR Type = 9
+	// TypeNULL a null RR (EXPERIMENTAL)
+	TypeNULL Type = 10
+	// TypeWKS a well known service description
+	TypeWKS Type = 11
+	// TypePTR a domain name pointer
+	TypePTR Type = 12
+	// TypeHINFO host information
+	TypeHINFO Type = 13
+	// TypeMINFO mailbox or mail list information
+	TypeMINFO Type = 14
+	// TypeMX mail exchange
+	TypeMX Type = 15
+	// TypeTXT text strings
+	TypeTXT Type = 16
+	// TypeAAAA An ipv6 host address
+	TypeAAAA Type = 28
+
+	// QTypes
+
+	// QTypeAXFR A request for a transfer of an entire zone
+	QTypeAXFR Type = 252
+	// QTypeMAILB A request for mailbox-related records (MB, MG or MR)
+	QTypeMAILB Type = 253
+	// QTypeMAILA A request for mail agent RRs (Obsolete - see MX)
+	QTypeMAILA Type = 254
+	// QTypeAll A request for all records
+	QTypeAll Type = 255
+
+	// ClassIN the internet
+	ClassIN Class = 1
+	// ClassCS the CSNET class (Obsolete - used only for examples in some obsolete RFCs)
+	ClassCS Class = 2
+	// ClassChaos the CHAOS class
+	ClassChaos Class = 3
+	// ClassHS Hesiod
+	ClassHS Class = 4
+
+	// QClasses
+
+	// QClassAny any class
+	QClassAny Class = 255
 )
+
+type Type uint16
+
+func (t Type) encode(w writeOffsetter, c *compressionCache) error {
+	return writeUint16(w, uint16(t))
+}
+
+func (t *Type) decode(r readSeekOffsetter) error {
+	n, err := readUint16(r)
+	if err != nil {
+		return err
+	}
+	*t = Type(n)
+	return nil
+}
+
+type Class uint16
+
+func (cl Class) encode(w writeOffsetter, c *compressionCache) error {
+	return writeUint16(w, uint16(cl))
+}
+
+func (cl *Class) decode(r readSeekOffsetter) error {
+	n, err := readUint16(r)
+	if err != nil {
+		return err
+	}
+	*cl = Class(n)
+	return nil
+}
 
 type ResourceRecord struct {
 	// an owner name, i.e., the name of the node to which
@@ -14,139 +104,120 @@ type ResourceRecord struct {
 	Class Class
 
 	TTL uint32
-	// specifies the length in octets of the RDATA field
-	rdLength uint16
-	// a variable length string of octets that describes the
-	// resource.  The format of this information varies
-	// according to the TYPE and CLASS of the resource record
-	rData []byte
 
-	nameLookup nameLookup
+	Data interface{}
 }
 
-func (rr *ResourceRecord) marshal(w writer) error {
-	err := w.WriteName(rr.Name)
-	if err != nil {
+func (rr *ResourceRecord) encode(w writeOffsetter, c *compressionCache) error {
+	if err := rr.Name.encode(w, c); err != nil {
 		return err
 	}
 
-	err = w.WriteData(uint16(rr.Type))
-	if err != nil {
+	if err := rr.Type.encode(w, c); err != nil {
 		return err
 	}
 
-	err = w.WriteData(uint16(rr.Class))
-	if err != nil {
+	if err := rr.Class.encode(w, c); err != nil {
 		return err
 	}
 
-	err = w.WriteData(rr.TTL)
-	if err != nil {
+	if err := writeUint32(w, rr.TTL); err != nil {
 		return err
 	}
 
-	err = w.WriteData(rr.rdLength)
-	if err != nil {
+	dEnc, ok := rr.Data.(encoder)
+	if !ok {
+		return errors.New("data does not implement encoder interface")
+	}
+
+	return dEnc.encode(w, c)
+}
+
+func (rr *ResourceRecord) decode(r readSeekOffsetter) error {
+
+	if err := rr.Name.decode(r); err != nil {
 		return err
 	}
 
-	err = w.WriteData(rr.rData)
+	if err := rr.Type.decode(r); err != nil {
+		return err
+	}
+
+	if err := rr.Class.decode(r); err != nil {
+		return err
+	}
+
+	ttl, err := readUint32(r)
 	if err != nil {
 		return err
 	}
+	rr.TTL = ttl
+
+	data := getRecordData(rr.Type)
+	dec, ok := data.(decoder)
+	if !ok {
+		return errors.New("invalid record data")
+	}
+
+	if err := dec.decode(r); err != nil {
+		return err
+	}
+
+	rr.Data = dec
 
 	return nil
 }
 
-func (rr *ResourceRecord) unmarshal(r reader) error {
-	name, err := r.ReadName()
-	if err != nil {
+func getRecordData(t Type) interface{} {
+	switch t {
+	case TypeA:
+		return ARecordData{}
+	case TypeNS:
+		return NSRecordData{}
+	default:
+		return unsupportedRecordData{}
+	}
+
+}
+
+type nameRecordData struct {
+	Name Name
+}
+
+func (n *nameRecordData) encode(w writeOffsetter, c *compressionCache) error {
+	buf := newOffsetWriter(w.Offset())
+	if err := n.Name.encode(buf, c); err != nil {
+		return err
+	}
+	if err := writeUint16(w, buf.Len()); err != nil {
 		return err
 	}
 
-	rType, err := r.ReadUint16()
+	_, err := buf.WriteTo(w)
+
+	return err
+}
+
+func (n *nameRecordData) decode(r readSeekOffsetter) error {
+	_, err := readUint16(r)
 	if err != nil {
 		return err
 	}
-
-	rClass, err := r.ReadUint16()
-	if err != nil {
-		return err
-	}
-
-	ttl, err := r.ReadUint32()
-	if err != nil {
-		return err
-	}
-
-	rdLength, err := r.ReadUint16()
-	if err != nil {
-		return err
-	}
-
-	rData, err := r.ReadNBytes(int(rdLength))
-	if err != nil {
-		return nil
-	}
-
-	rr = &ResourceRecord{
-		Name:     name,
-		Type:     Type(rType),
-		Class:    Class(rClass),
-		TTL:      ttl,
-		rdLength: rdLength,
-		rData:    rData,
-	}
-	return nil
+	return n.Name.decode(r)
 }
 
-// An A record
-type ARecord struct {
-	ResourceRecord
-	Address net.IP
+func (n nameRecordData) String() string {
+	return n.Name.String()
 }
 
-func (a *ARecord) Decode() error {
-	a.Address = net.IP(a.rData)
-	return nil
+type NSRecordData struct {
+	nameRecordData
 }
 
-func (a *ARecord) Encode() error {
-	a.rData = a.Address
-	a.rdLength = uint16(len(a.rData))
-	return nil
+type CNameRecordData struct {
+	nameRecordData
 }
 
-// A Ptr record
-type PtrRecord struct {
-	ResourceRecord
-	DomainName Name
-}
-
-// A NS record
-type NSRecord struct {
-	ResourceRecord
-	DomainName Name
-}
-
-type CNameRecord struct {
-	ResourceRecord
-	DomainName Name
-}
-
-type MXRecord struct {
-	ResourceRecord
-	DomainName Name
-	Preference uint16
-}
-
-type SOARecord struct {
-	ResourceRecord
-	MName   Name
-	RName   Name
-	Serial  uint32
-	Refresh int32
-	Retry   int32
-	Expire  int32
-	Minimum uint32
+type PTRRecordData struct {
+	nameRecordData
 }

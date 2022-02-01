@@ -25,13 +25,13 @@ func (c cacheRecord) IsExpired() bool {
 }
 
 type Cache struct {
-	mu *sync.Mutex
+	mu *sync.RWMutex
 	c  map[string]recordSet
 }
 
 func New() *Cache {
 	return &Cache{
-		mu: &sync.Mutex{},
+		mu: &sync.RWMutex{},
 		c:  make(map[string]recordSet),
 	}
 }
@@ -73,11 +73,11 @@ func (r *Cache) get(name string) ([]cacheRecord, bool) {
 }
 
 func (r *Cache) Add(name string, records ...dns.ResourceRecord) {
-	timeAdded := time.Now()
+	timeIn := time.Now()
 	cacheRecords := []cacheRecord{}
 	for i := range records {
 		cacheRecords = append(cacheRecords, cacheRecord{
-			ExpirationTime: timeAdded.Add(time.Duration(records[i].TTL) * time.Second),
+			ExpirationTime: timeIn.Add(time.Duration(records[i].TTL) * time.Second),
 			ResourceRecord: records[i],
 		})
 	}
